@@ -258,21 +258,40 @@ function checker:add_target(ip, port, hostname, healthy)
       return nil, "failed to store target_list in shm: " .. err
     end
 
-    return true
-  end)
-
-  if ok then
     -- raise event for our newly added target
     local event = healthy and "healthy" or "unhealthy"
     self:raise_event(self.events[event], ip, port, hostname)
+
     return true
-  elseif ok == false then
+  end)
+
+  if ok == false then
     -- the target already existed, no event, but still success
     return true
   end
 
   return nil, err
 
+end
+
+
+-- Remove health status entries from an individual target from shm
+-- @param self The checker object
+-- @param ip IP address of the target being checked.
+-- @param port the port being checked against.
+local function clear_target_data_from_shm(self, ip, port)
+    local ok, err = self.shm:set(get_shm_key(self.TARGET_STATUS, ip, port), nil)
+    if not ok then
+      self:log(ERR, "failed to remove health status from shm: ", err)
+    end
+    ok, err = self.shm:set(get_shm_key(self.TARGET_OKS, ip, port), nil)
+    if not ok then
+      self:log(ERR, "failed to clear health counter from shm: ", err)
+    end
+    ok, err = self.shm:set(get_shm_key(self.TARGET_NOKS, ip, port), nil)
+    if not ok then
+      self:log(ERR, "failed to clear health counter from shm: ", err)
+    end
 end
 
 
@@ -312,11 +331,7 @@ function checker:remove_target(ip, port)
       return nil, "failed to store target_list in shm: " .. err
     end
 
-    -- remove health status from shm
-    ok, err = self.shm:set(get_shm_key(self.TARGET_STATUS, ip, port), nil)
-    if not ok then
-      self:log(ERR, "failed to remove health status from shm: ", err)
-    end
+    clear_target_data_from_shm(self, ip, port)
 
     -- raise event for our removed target
     self:raise_event(self.events.remove, ip, port, target_found.hostname)
@@ -345,18 +360,7 @@ function checker:clear()
     -- remove all individual statuses
     for _, target in ipairs(old_target_list) do
       local ip, port = target.ip, target.port
-      ok, err = self.shm:set(get_shm_key(self.TARGET_STATUS, ip, port), nil)
-      if not ok then
-        self:log(ERR, "failed to remove health status from shm: ", err)
-      end
-      ok, err = self.shm:set(get_shm_key(self.TARGET_OKS, ip, port), nil)
-      if not ok then
-        self:log(ERR, "failed to clear health counter from shm: ", err)
-      end
-      ok, err = self.shm:set(get_shm_key(self.TARGET_NOKS, ip, port), nil)
-      if not ok then
-        self:log(ERR, "failed to clear health counter from shm: ", err)
-      end
+      clear_target_data_from_shm(self, ip, port)
     end
 
     self.targets = {}
@@ -382,41 +386,6 @@ function checker:get_target_status(ip, port)
   return target.healthy
 
 end
-
---[[ (not for the first iteration)
---- Sets the current status of the target.
--- This will immediately set the status, it will not count against
--- failure/success count.
--- @param ip IP address of the target being checked
--- @param port the port being checked against
--- @return `true` on success, or `nil + error` on failure
-function checker:set_target_status(ip, port, enabled)
-  -- What is this function setting? it should not set the status but the "status-info"
-  -- that defines wheter it is up/down.
-  -- Eg. 100 successes in a row, then we call this to set it down anyway.
-  -- The next healthcheck is a success. Now what is going to happen?
-
-  -- OPTION: if status is set to `false` then it is marked `down` and
-  -- excluded from the healthchecks (or any other health info from the
-  -- health management functions). If status is set to `true` it will be checked
-  -- and health info will be collected
-
-  -- OPTION: Will mark a node as down, and keep it down, indepedent of received health data.
-  -- When the change to down is a change in status, an event will be sent.
-  -- While down healthchecks will continue, but not influence the state.
-  -- When reenabling the checks, the last state, according to the last health data
-  -- receieved (during the time the node was forcefully down) will detrmine the new status
-
-  -- OPTION: if status is set to `false` then it is marked `disabled` and
-  -- healthchecks keep going but do not report events. If status is set to `true`
-  -- it will start reporting status changes again. Also reports a `enabled`/`disabled` event.
-
-
-  -- TODO: implement
-
-end
-]]
-
 
 
 ------------------------------------------------------------------------------
@@ -595,7 +564,8 @@ end
 -- @param port the port being checked against.
 -- @param http_status the http statuscode, or nil to report an invalid http response.
 -- @param check (optional) the type of check, either "passive" or "active", default "passive".
--- @return `true` on success, or `nil + error` on failure.
+-- @return `true` on success, `nil` if the status was ignored (not in active or
+-- passive health check lists) or `nil + error` on failure.
 function checker:report_http_status(ip, port, http_status, check)
   http_status = tonumber(http_status) or 0
 
@@ -651,6 +621,59 @@ function checker:report_timeout(ip, port, check)
 
 end
 
+
+--- Sets the current status of the target.
+-- This will immediately set the status and clear its counters.
+-- @param ip IP address of the target being checked
+-- @param port the port being checked against
+-- @param mode boolean: `true` for healthy, `false` for unhealthy
+-- @return `true` on success, or `nil + error` on failure
+function checker:set_target_status(ip, port, mode)
+  ip   = tostring(assert(ip, "no ip address provided"))
+  port = assert(tonumber(port), "no port number provided")
+  assert(type(mode) == "boolean")
+
+  local health_mode = mode and "healthy" or "unhealthy"
+
+  local target = (self.targets[ip] or EMPTY)[port]
+  if not target then
+    -- sync issue: warn, but return success
+    self:log(WARN, "trying to set status for a target that is not in the list: ", ip, ":", port)
+    return true
+  end
+
+  local oks_key = get_shm_key(self.TARGET_OKS, ip, port)
+  local noks_key = get_shm_key(self.TARGET_NOKS, ip, port)
+  local status_key = get_shm_key(self.TARGET_STATUS, ip, port)
+
+  local ok, err = locking_target(self, ip, port, function()
+
+    local _, err = self.shm:set(oks_key, 0)
+    if err then
+      return nil, err
+    end
+
+    local _, err = self.shm:set(noks_key, 0)
+    if err then
+      return nil, err
+    end
+
+    self.shm:set(status_key, health_mode == "healthy")
+    if err then
+      return nil, err
+    end
+
+    self:raise_event(self.events[health_mode], ip, port, target.hostname)
+
+    return true
+
+  end)
+
+  if ok then
+    self:log(WARN, health_mode, " forced for ", ip, ":", port)
+  end
+  return ok, err
+end
 
 
 --============================================================================
@@ -1085,7 +1108,7 @@ function _M.new(opts)
   -- other properties
   self.targets = nil     -- list of targets, initially loaded, maintained by events
   self.events = nil      -- hash table with supported events (prevent magic strings)
-  self.stopping = true   -- flag to idicate to timers to stop checking
+  self.stopping = true   -- flag to indicate to timers to stop checking
   self.timer_count = 0   -- number of running timers
   self.ev_callback = nil -- callback closure per checker instance
 
