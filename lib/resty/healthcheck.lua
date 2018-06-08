@@ -115,7 +115,7 @@ end
 
 
 -- Some color for demo purposes
-local use_color = true
+local use_color = false
 local function green(str) return use_color and ("\027[32m" .. str .. "\027[0m") or str end
 local function red(str) return use_color and ("\027[31m" .. str .. "\027[0m") or str end
 local function worker_color(str) return use_color and ("\027["..tostring(31 + ngx.worker.pid() % 5).."m"..str.."\027[0m") or str end
@@ -270,7 +270,7 @@ function checker:add_target(ip, port, hostname, healthy)
     return true
   end
 
-  return nil, err
+  return ok, err
 
 end
 
@@ -460,6 +460,11 @@ end
 -- @return True if succeeded, or nil and an error message.
 local function incr_counter(self, health_mode, ip, port, limit, ctr_type)
 
+  -- fail fast on counters that are disabled by configuration
+  if limit == 0 then
+    return true
+  end
+
   port = tonumber(port)
   local target = (self.targets[ip] or EMPTY)[port]
   if not target then
@@ -520,6 +525,9 @@ end
 -- Reports a health failure which will count against the number of occurrences
 -- required to make a target "fall". The type of healthchecker,
 -- "tcp" or "http" (see `new`) determines against which counter the occurence goes.
+-- If `unhealthy.tcp_failures` (for TCP failures) or `unhealthy.http_failures`
+-- is set to zero in the configuration, this function is a no-op
+-- and returns `true`.
 -- @param ip IP address of the target being checked.
 -- @param port the port being checked against.
 -- @param check (optional) the type of check, either "passive" or "active", default "passive".
@@ -544,6 +552,8 @@ end
 --- Report a health success.
 -- Reports a health success which will count against the number of occurrences
 -- required to make a target "rise".
+-- If `healthy.successes` is set to zero in the configuration,
+-- this function is a no-op and returns `true`.
 -- @param ip IP address of the target being checked.
 -- @param port the port being checked against.
 -- @param check (optional) the type of check, either "passive" or "active", default "passive".
@@ -560,6 +570,10 @@ end
 --- Report a http response code.
 -- How the code is interpreted is based on the configuration for healthy and
 -- unhealthy statuses. If it is in neither strategy, it will be ignored.
+-- If `healthy.successes` (for healthy HTTP status codes)
+-- or `unhealthy.http_failures` (fur unhealthy HTTP status codes)
+-- is set to zero in the configuration, this function is a no-op
+-- and returns `true`.
 -- @param ip IP address of the target being checked.
 -- @param port the port being checked against.
 -- @param http_status the http statuscode, or nil to report an invalid http response.
@@ -588,6 +602,8 @@ function checker:report_http_status(ip, port, http_status, check)
 end
 
 --- Report a failure on TCP level.
+-- If `unhealthy.tcp_failures` is set to zero in the configuration,
+-- this function is a no-op and returns `true`.
 -- @param ip IP address of the target being checked.
 -- @param port the port being checked against.
 -- @param operation The socket operation that failed:
@@ -609,6 +625,8 @@ end
 
 
 --- Report a timeout failure.
+-- If `unhealthy.timeouts` is set to zero in the configuration,
+-- this function is a no-op and returns `true`.
 -- @param ip IP address of the target being checked.
 -- @param port the port being checked against.
 -- @param check (optional) the type of check, either "passive" or "active", default "passive".
@@ -1089,6 +1107,11 @@ end
 -- * `checks.passive.unhealthy.tcp_failures`: number of TCP failures to consider a target unhealthy
 -- * `checks.passive.unhealthy.timeouts`: number of timeouts to consider a target unhealthy
 -- * `checks.passive.unhealthy.http_failures`: number of HTTP failures to consider a target unhealthy
+--
+-- If any of the health counters above (e.g. `checks.passive.unhealthy.timeouts`)
+-- is set to zero, the according category of checks is not taken to account.
+-- This way active or passive health checks can be disabled selectively.
+--
 -- @return checker object, or `nil + error`
 function _M.new(opts)
 

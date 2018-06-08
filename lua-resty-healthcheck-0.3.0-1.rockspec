@@ -1,9 +1,17 @@
+-- This file was automatically generated for the LuaDist project.
+
 package = "lua-resty-healthcheck"
-version = "0.2.0-1"
+version = "0.3.0-1"
+-- LuaDist source
 source = {
-   url = "https://github.com/Kong/lua-resty-healthcheck/archive/0.2.0.tar.gz",
-   dir = "lua-resty-healthcheck-0.2.0"
+  tag = "0.3.0-1",
+  url = "git://github.com/LuaDist-testing/lua-resty-healthcheck.git"
 }
+-- Original source
+-- source = {
+--    url = "https://github.com/Kong/lua-resty-healthcheck/archive/0.3.0.tar.gz",
+--    dir = "lua-resty-healthcheck-0.3.0"
+-- }
 description = {
    summary = "Healthchecks for OpenResty to check upstream service status",
    detailed = [[
