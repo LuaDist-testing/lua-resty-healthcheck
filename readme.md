@@ -96,9 +96,22 @@ for the complete API.
 
 ## History
 
-### 0.1.0 (27-Nov-2018) Initial release
+### 0.4.0 (20-Mar-2017)
 
-  * Initial upload
+ * Correct setting of defaults in `http_statuses`
+ * Type and bounds checking to `checks` table
+
+### 0.3.0 (18-Dec-2017)
+
+ * Disable individual checks by setting their counters to 0
+
+### 0.2.0 (30-Nov-2017)
+
+ * Adds `set_target_status"
+
+### 0.1.0 (27-Nov-2017) Initial release
+
+ * Initial upload
 
 ## Copyright and License
 
@@ -118,5 +131,5 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ```
 
-[badge-travis-url]: https://travis-ci.com/Kong/lua-resty-healthcheck/branches
-[badge-travis-image]: https://travis-ci.com/Kong/lua-resty-healthcheck.svg?token=cpcsrmGmJZdztxDeoJqq&branch=master
+[badge-travis-url]: https://travis-ci.org/Kong/lua-resty-healthcheck/branches
+[badge-travis-image]: https://travis-ci.org/Kong/lua-resty-healthcheck.svg?branch=master
